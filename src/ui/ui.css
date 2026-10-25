@@ -1631,6 +1631,9 @@ html[data-touch][data-touch-hand="left"] .kr .kr-pos {
 
 /* staged entrance for the children of an active screen */
 .kr-screen.on .kr-stage { animation: kr-stage 0.72s var(--e-out) both; }
+/* Hold the entrance while the boot curtain is still down, so the title plays
+   in as the curtain lifts instead of having finished, unseen, underneath it. */
+html:has(#boot:not(.done)) .kr-screen.on .kr-stage { animation-play-state: paused; }
 @keyframes kr-stage {
   0%   { opacity: 0; transform: translateY(3.2vmin) scale(0.97); }
   100% { opacity: 1; transform: translateY(0) scale(1); }

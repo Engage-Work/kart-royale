@@ -219,6 +219,15 @@ async function boot() {
   (window as any).__gameReady = false;
 }
 
+/** Consecutive presented frames under this interval count as settled. */
+const CURTAIN_SMOOTH_MS = 34;
+const CURTAIN_SMOOTH_FRAMES = 6;
+/** ...but never hold the menu back longer than this after frame 8. */
+const CURTAIN_MAX_WAIT_MS = 2500;
+let curtainUp = true;
+let smoothRun = 0;
+let readyAt = 0;
+
 /** Fades the boot curtain once a real frame is actually on screen. */
 function dismissBootScreen() {
   const boot = document.getElementById('boot');
@@ -889,9 +898,26 @@ function frame(now: number) {
   }
   lastTickPresented = presented;
 
+  // `__gameReady` stays on frame 8: every harness keys off it. The CURTAIN
+  // waits for the frames to actually be smooth. The first frames after boot
+  // still upload every generated texture and build its mips, and lifting on a
+  // fixed frame count revealed the title over exactly those hitches. Capped,
+  // so a machine that never runs smoothly still gets its menu.
   if (ctx.frame === 8) {
     (window as any).__gameReady = true;
-    dismissBootScreen();
+    readyAt = now;
+    // Input reaches the menu from here on, exactly as it did when the curtain
+    // lifted on this frame — the touch harnesses tap by coordinate as soon as
+    // `__gameReady` flips, and a curtain still taking pointer events would eat
+    // those taps.
+    document.getElementById('boot')?.classList.add('ready');
+  }
+  if (curtainUp && ctx.frame >= 8) {
+    smoothRun = presented && raw * 1000 < CURTAIN_SMOOTH_MS ? smoothRun + 1 : 0;
+    if (smoothRun >= CURTAIN_SMOOTH_FRAMES || now - readyAt > CURTAIN_MAX_WAIT_MS) {
+      curtainUp = false;
+      dismissBootScreen();
+    }
   }
 }
 

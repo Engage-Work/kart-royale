@@ -79,7 +79,8 @@
           radial-gradient(120% 90% at 50% 8%, #2c3560 0%, #141a33 42%, #080b16 100%);
         color: #f3f6fb; transition: opacity .55s ease; font-family: system-ui, -apple-system, sans-serif;
       }
-      #boot.done { opacity: 0; pointer-events: none; }
+      #boot.done { opacity: 0; }
+      #boot.ready, #boot.done { pointer-events: none; }
       .boot-in { display: flex; flex-direction: column; align-items: center; gap: 3.4vmin; }
       .boot-mark {
         font-size: 8.2vmin; font-weight: 900; letter-spacing: .1em; line-height: .96;
