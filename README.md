@@ -91,9 +91,10 @@ Useful URL flags:
 | `?quality=low\|medium\|high\|ultra` | override the auto-detected tier |
 | `?debug=gl` | print a GPU/extension/shader-error report; `__gl()` in the console |
 | `?debug=frames` | sample the drawing buffer for partial-black presents |
+| `?rec` | enable the `R` key, which records gameplay to a `.webm` |
 
 In the console: `__feel.punchy()` retunes the sense of speed live, `__gl()` dumps
-a diagnostic report, `R` records gameplay to a `.webm`.
+a diagnostic report.
 
 ## What's in here
 

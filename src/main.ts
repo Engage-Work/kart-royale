@@ -205,8 +205,10 @@ async function boot() {
   bootProgress(1, 'ready');
 
   // Press R to record. Deliberately not a System: it owns no scene state and
-  // must keep working while the game is paused or on a menu.
-  new Recorder().install();
+  // must keep working while the game is paused or on a menu. Opt-in with
+  // `?rec`: it is a capture tool, and for a player a stray R opened a
+  // screen-share prompt and then downloaded a video file.
+  if (new URLSearchParams(location.search).has('rec')) new Recorder().install();
   // See `?scaler=`. Applied here rather than in the loop so that the very first
   // presented frame is already at the pinned resolution — a pinned run must not
   // contain a rung change of its own, which is the whole point of pinning.
