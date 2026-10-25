@@ -123,6 +123,7 @@
     </style>
     <script type="module" src="/src/main.ts"></script>
 
+    <!-- vercel-analytics -->
     <!-- Vercel Web Analytics. This is the `@vercel/analytics` package's entire
          job, done without the package: the script is served by the platform at
          this path on a Vercel deployment, so there is no new runtime dependency
@@ -134,7 +135,10 @@
          platform only serves that path in production, so every local run logged
          a failed request, and drift-bench, mobile-soak and context-loss all
          gate on "zero page errors" — three green harnesses reported FAIL for a
-         missing analytics script. Only ask for the file where it exists. -->
+         missing analytics script. Only ask for the file where it exists.
+         The same holds for builds served anywhere but Vercel (GitHub Pages,
+         an app store host), so vite.config.ts drops this whole block unless
+         the build itself runs on Vercel. -->
     <script>
       (function () {
         var h = location.hostname;
@@ -146,5 +150,6 @@
         document.head.appendChild(s);
       })();
     </script>
+    <!-- /vercel-analytics -->
   </body>
 </html>
