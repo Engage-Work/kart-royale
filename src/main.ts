@@ -11,7 +11,7 @@ import { installFeel } from './core/Feel';
 import { RenderPipeline } from './render/Renderer';
 import { DrawBudget } from './render/DrawBudget';
 import { Sky } from './render/Sky';
-import { Materials } from './render/Materials';
+import { Materials, CIRCUIT_MATERIALS } from './render/Materials';
 import { Track } from './world/Track';
 import { Scenery } from './world/Scenery';
 import { Effects } from './fx/Effects';
@@ -167,6 +167,18 @@ async function boot() {
     // frozen bar, which looks worse than no bar at all.
     await new Promise((r) => requestAnimationFrame(r));
     await systems[i].init?.(ctx);
+    // The circuit's procedural textures are most of the CPU in boot, and left
+    // to `Track.init` / `Scenery.init` they ran as two multi-second tasks. One
+    // material per frame instead; see CIRCUIT_MATERIALS.
+    if (systems[i] === materials) {
+      const lo = (i + 0.2) / (systems.length + 1);
+      const hi = (i + 1) / (systems.length + 1);
+      for (let m = 0; m < CIRCUIT_MATERIALS.length; m++) {
+        bootProgress(lo + (hi - lo) * (m / CIRCUIT_MATERIALS.length), SYSTEM_LABELS[i]);
+        await new Promise((r) => requestAnimationFrame(r));
+        materials.get(CIRCUIT_MATERIALS[m]);
+      }
+    }
   }
   frameWatch.init(ctx);
   diagnostics.init(ctx);

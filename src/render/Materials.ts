@@ -143,6 +143,29 @@ export type MaterialName =
   | 'neon';
 
 /**
+ * The materials Sunset Bay asks for while `Track.init` and `Scenery.init` run,
+ * in the order it asks. Boot builds these one per frame BEFORE those two
+ * systems, so the procedural texture work no longer lands inside them.
+ *
+ * Measured in node at Quality.High (pixel loops real, canvas/GL stubbed, so
+ * a lower bound): Track.init ~4.0 s and Scenery.init ~2.7 s, each a single
+ * main-thread task, of which ~4.4 s was these builds — tarmac alone is ~0.7 s.
+ * That was a frozen page with the boot bar parked on one label for four
+ * seconds. Pre-built here, each step is one material (tarmac, the largest, is
+ * ~0.7 s) and the longest remaining task is Scenery's non-material work,
+ * ~1.4 s. Builders read only size, quality and anisotropy (the env map is
+ * applied later, in `update`), so building them early changes nothing.
+ *
+ * Purely a scheduling hint: `get()` memoises, builds are seeded and order-free,
+ * and a name missing from this list is still built lazily exactly as before.
+ */
+export const CIRCUIT_MATERIALS: readonly MaterialName[] = [
+  'tarmac', 'tarmac-racing-line', 'cobblestone', 'kerb', 'boost-pad', 'water-surface',
+  'metal-painted', 'tunnel-bore', 'tunnel-light', 'stone-wall', 'stucco', 'roof-tile',
+  'marble', 'wood-plank', 'glass', 'rubber', 'cliff-rock',
+];
+
+/**
  * Base texture resolution before the quality scale is applied — i.e. the size
  * a desktop tier gets. `Materials.res()` applies the tier scale and the global
  * texture cap on top; see the note there.
