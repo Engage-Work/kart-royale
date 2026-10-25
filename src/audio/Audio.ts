@@ -38,7 +38,7 @@ import {
   type IKart,
   type System,
 } from '../types';
-import { EPS, mtof, Synth } from './Synth';
+import { EPS, mtof, Synth, bakeSynthBuffers, type SynthBuffers } from './Synth';
 import { Music } from './Music';
 
 // --- module scope scratch: nothing in update() allocates ---------------------
@@ -902,6 +902,14 @@ class Ambience {
 // Audio system
 // ---------------------------------------------------------------------------
 
+/** Run `fn` in an idle slot (bounded), or on the next task where there are none. */
+function later(fn: () => void) {
+  const ric = (globalThis as any).requestIdleCallback as
+    ((cb: () => void, o?: { timeout: number }) => number) | undefined;
+  if (ric) ric(fn, { timeout: 250 });
+  else setTimeout(fn, 16);
+}
+
 export class Audio implements System {
   private ctx: Ctx | null = null;
   private synth: Synth | null = null;
@@ -917,6 +925,8 @@ export class Audio implements System {
   private sidechain = -1;
   private lastAt = new Map<string, number>();
   private engineSend: GainNode | null = null;
+  /** a context created by `unlock` whose graph is still being baked */
+  private pending: AudioContext | null = null;
   private onGesture = () => this.unlock();
   private onVisibility = () => this.syncSuspend();
 
@@ -941,9 +951,10 @@ export class Audio implements System {
 
   private unlock() {
     if (this.failed) return;
-    if (this.synth) {
+    const live = this.synth?.ctx ?? this.pending;
+    if (live) {
       // Later gestures just nudge a context the browser suspended on us.
-      if (this.synth.ctx.state !== 'running') this.synth.ctx.resume().catch(() => {});
+      if (live.state !== 'running') live.resume().catch(() => {});
       return;
     }
     const ctx = this.ctx;
@@ -953,8 +964,42 @@ export class Audio implements System {
       this.failed = true;
       return;
     }
-    const vol = ctx.settings?.masterVolume ?? 0.8;
-    if (this.build(null, vol)) this.synth!.ctx.resume().catch(() => {});
+    // Only the context has to be created and resumed INSIDE the gesture — that
+    // is the whole of what autoplay policy (and iOS) asks for, and it is cheap.
+    // The graph is not: its buffers are 66-88 ms of cold JS (see
+    // `bakeSynthBuffers`), and running them here put that stall on the very
+    // first key the player pressed, i.e. the Enter that leaves the title. They
+    // are baked one per idle slot instead and the graph built after them.
+    let ac: AudioContext;
+    try {
+      ac = new AC({ latencyHint: 'interactive' });
+    } catch (err) {
+      console.warn('[audio] unavailable', err);
+      this.failed = true;
+      return;
+    }
+    ac.resume().catch(() => {});
+    this.pending = ac;
+    const bake = bakeSynthBuffers(ac);
+    const step = () => {
+      let r: IteratorResult<void, SynthBuffers>;
+      try {
+        r = bake.next();
+      } catch (err) {
+        console.warn('[audio] unavailable', err);
+        this.failed = true;
+        this.pending = null;
+        return;
+      }
+      if (!r.done) {
+        later(step);
+        return;
+      }
+      this.pending = null;
+      const vol = ctx.settings?.masterVolume ?? 0.8;
+      if (this.build(ac, vol, r.value)) ac.resume().catch(() => {});
+    };
+    later(step);
   }
 
   /**
@@ -974,9 +1019,9 @@ export class Audio implements System {
   }
 
   /** Shared graph construction. Returns false if audio is unavailable. */
-  private build(ac: BaseAudioContext | null, vol: number): boolean {
+  private build(ac: BaseAudioContext | null, vol: number, baked?: SynthBuffers): boolean {
     try {
-      const s = new Synth(vol, ac ?? undefined);
+      const s = new Synth(vol, ac ?? undefined, baked);
       this.lastVolume = vol;
       // Bus-level sends: a touch of room on everything, opened up in the tunnel.
       //
@@ -1276,6 +1321,13 @@ export class Audio implements System {
   // -------------------------------------------------------------------------
 
   private onEvent(e: GameEvent) {
+    // A gamepad press is not a user activation, so a pad-only player never
+    // fires the window listeners above and would race in silence. Menu input
+    // from any device arrives here as a 'ui' event; trying from it is harmless
+    // where autoplay is refused (the context waits, suspended, for the next
+    // real gesture) and is all it takes where it is allowed, e.g. a desktop
+    // app shell.
+    if (e.type === 'ui' && !this.synth && !this.pending) this.unlock();
     const s = this.synth;
     if (!s || s.ctx.state !== 'running') return;
     switch (e.type) {

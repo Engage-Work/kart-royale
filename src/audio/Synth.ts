@@ -58,6 +58,160 @@ const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi 
 /** MIDI note number → Hz, A4 = 69 = 440 Hz. */
 export const mtof = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 
+// -------------------------------------------------------------------------
+// Buffer generation
+// -------------------------------------------------------------------------
+
+/**
+ * Stereo noise. The two channels are decorrelated, which is what makes wind
+ * and tyre hiss sit *around* the listener instead of as a point in the middle.
+ * 'crackle' is a sparse pop train — it is the whole basis of the overrun
+ * burble and of gravel scatter.
+ */
+function noiseBuffer(ac: BaseAudioContext, kind: NoiseKind, seconds: number, seed: number): AudioBuffer {
+  const sr = ac.sampleRate;
+  const n = Math.floor(sr * seconds);
+  // The loop join is made seamless by generating `fade` extra samples and
+  // crossfading the head against them: the last output sample and the first
+  // are then adjacent samples of one continuous process, so there is no step
+  // at the join. 90 ms is long enough that pink noise's low-frequency content
+  // fades rather than thumps.
+  const fade = Math.floor(sr * 0.09);
+  const len = n - fade;
+  const buf = ac.createBuffer(2, len, sr);
+  const raw = new Float32Array(n);
+  for (let c = 0; c < 2; c++) {
+    const d = raw;
+    const rnd = mulberry32(seed + c * 7919);
+    if (kind === 'white') {
+      for (let i = 0; i < n; i++) d[i] = rnd() * 2 - 1;
+    } else if (kind === 'pink') {
+      // Paul Kellet's refined pink filter — cheap and flat enough to 20 kHz.
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < n; i++) {
+        const w = rnd() * 2 - 1;
+        b0 = 0.99886 * b0 + w * 0.0555179;
+        b1 = 0.99332 * b1 + w * 0.0750759;
+        b2 = 0.969 * b2 + w * 0.153852;
+        b3 = 0.8665 * b3 + w * 0.3104856;
+        b4 = 0.55 * b4 + w * 0.5329522;
+        b5 = -0.7616 * b5 - w * 0.016898;
+        d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.16;
+        b6 = w * 0.115926;
+      }
+    } else {
+      // Sparse decaying impulses over a very low noise floor.
+      d.fill(0);
+      let i = 0;
+      while (i < n) {
+        i += Math.floor(rnd() * sr * 0.05) + 24;
+        if (i >= n) break;
+        const amp = 0.35 + rnd() * 0.65;
+        const len = 40 + Math.floor(rnd() * 260);
+        const sign = rnd() < 0.5 ? -1 : 1;
+        const f = 400 + rnd() * 2600;
+        for (let j = 0; j < len && i + j < n; j++) {
+          const t = j / len;
+          d[i + j] += sign * amp * Math.exp(-t * 7) * Math.sin((2 * Math.PI * f * j) / sr);
+        }
+      }
+      for (let j = 0; j < n; j++) d[j] += (rnd() * 2 - 1) * 0.02;
+    }
+    // The pink filter leaves a DC offset and can overshoot full scale. DC
+    // through the engine's waveshaper biases the whole tanh curve, so strip
+    // it and normalise before anything downstream sees it.
+    let mean = 0;
+    for (let i = 0; i < n; i++) mean += d[i];
+    mean /= n;
+    let peak = 0;
+    for (let i = 0; i < n; i++) {
+      d[i] -= mean;
+      const a = Math.abs(d[i]);
+      if (a > peak) peak = a;
+    }
+    if (peak > 0) {
+      const norm = 0.92 / peak;
+      for (let i = 0; i < n; i++) d[i] *= norm;
+    }
+
+    const out = buf.getChannelData(c);
+    for (let i = 0; i < fade; i++) {
+      const k = i / fade;
+      out[i] = d[i] * k + d[len + i] * (1 - k);
+    }
+    for (let i = fade; i < len; i++) out[i] = d[i];
+  }
+  return buf;
+}
+
+/**
+ * A plate-ish impulse response: a handful of early reflections in front of an
+ * exponentially decaying, progressively darkening diffuse tail.
+ */
+function impulseResponse(ac: BaseAudioContext, seconds: number, decay: number, brightness: number): AudioBuffer {
+  const sr = ac.sampleRate;
+  const n = Math.max(1, Math.floor(sr * seconds));
+  const buf = ac.createBuffer(2, n, sr);
+  const early = [0.011, 0.019, 0.026, 0.037, 0.049, 0.063, 0.081];
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    const rnd = mulberry32(0xbeef + c * 104729);
+    const pre = Math.floor(sr * 0.008);
+    let lp = 0;
+    let peak = 0;
+    for (let i = pre; i < n; i++) {
+      const t = (i - pre) / (n - pre);
+      const amp = Math.pow(1 - t, decay) * (1 - Math.exp(-t * 90));
+      const raw = (rnd() * 2 - 1) * amp;
+      // one-pole whose cutoff falls with time → the tail darkens naturally
+      const k = brightness * (1 - t * 0.85) + 0.03;
+      lp += (raw - lp) * k;
+      d[i] = lp;
+      const a = Math.abs(lp);
+      if (a > peak) peak = a;
+    }
+    for (let e = 0; e < early.length; e++) {
+      const idx = Math.floor((early[e] + (c ? 0.0031 : 0)) * sr);
+      if (idx < n) d[idx] += (e % 2 ? -1 : 1) * (0.55 - e * 0.06) * (0.8 + rnd() * 0.4);
+    }
+    const norm = peak > 0 ? 0.62 / peak : 1;
+    for (let i = 0; i < n; i++) d[i] *= norm;
+  }
+  return buf;
+}
+
+function drain<R>(g: Generator<void, R>): R {
+  for (;;) {
+    const r = g.next();
+    if (r.done) return r.value;
+  }
+}
+
+/** The sample buffers the graph needs, which are most of what building it costs. */
+export interface SynthBuffers {
+  ir: AudioBuffer;
+  noise: Record<NoiseKind, AudioBuffer>;
+}
+
+/**
+ * Synthesises `SynthBuffers` one buffer per step, so a caller can spread the
+ * work over several tasks. Measured in node with a stub context, building the
+ * whole graph in one go is 66-88 ms of cold JS — nearly all of it these four
+ * loops — and the game used to do that inside the very first keydown, i.e. on
+ * the Enter that leaves the title. `new Synth` without buffers drains this in
+ * one go, which is what the offline harness path wants.
+ */
+export function* bakeSynthBuffers(ac: BaseAudioContext): Generator<void, SynthBuffers> {
+  const ir = impulseResponse(ac, 2.35, 2.6, 0.62);
+  yield;
+  const white = noiseBuffer(ac, 'white', 2.0, 0x1a2b3c);
+  yield;
+  const pink = noiseBuffer(ac, 'pink', 2.7, 0x5eed01);
+  yield;
+  const crackle = noiseBuffer(ac, 'crackle', 3.1, 0xc0ffee);
+  return { ir, noise: { white, pink, crackle } };
+}
+
 export class Synth {
   readonly ctx: AudioContext;
 
@@ -88,14 +242,16 @@ export class Synth {
   private readonly voiceCap = 64;
 
   /**
-   * @param external an already-constructed context to build into. The game
-   *   never passes one. It exists so a harness can render this exact graph into
-   *   an OfflineAudioContext and measure it — every level, duck depth and tier
-   *   frequency quoted in the comments here and in Audio.ts came from such a
-   *   render, not from listening. An offline context implements every factory
-   *   used below.
+   * @param external an already-constructed context to build into. `Audio`
+   *   passes the one it created inside the unlock gesture. It also lets a
+   *   harness render this exact graph into an OfflineAudioContext and measure
+   *   it — every level, duck depth and tier frequency quoted in the comments
+   *   here and in Audio.ts came from such a render, not from listening. An
+   *   offline context implements every factory used below.
+   * @param baked buffers from `bakeSynthBuffers` on this same context, when the
+   *   caller has already spread that work out; synthesised here otherwise.
    */
-  constructor(volume: number, external?: BaseAudioContext) {
+  constructor(volume: number, external?: BaseAudioContext, baked?: SynthBuffers) {
     const AC: typeof AudioContext =
       (globalThis as any).AudioContext || (globalThis as any).webkitAudioContext;
     this.ctx = (external ?? new AC({ latencyHint: 'interactive' })) as AudioContext;
@@ -207,7 +363,8 @@ export class Synth {
     // --- reverb -----------------------------------------------------------
     const conv = ac.createConvolver();
     conv.normalize = false;
-    conv.buffer = this.makeImpulseResponse(2.35, 2.6, 0.62);
+    const bufs = baked ?? drain(bakeSynthBuffers(ac));
+    conv.buffer = bufs.ir;
     // High-passing the send keeps engine rumble out of the tail; without this
     // the reverb turns to mud the moment the player is at full throttle.
     const sendHP = ac.createBiquadFilter();
@@ -254,11 +411,7 @@ export class Synth {
     fbL.connect(dL);
     delayReturn.connect(this.mix);
 
-    this.noiseBuf = {
-      white: this.makeNoise('white', 2.0, 0x1a2b3c),
-      pink: this.makeNoise('pink', 2.7, 0x5eed01),
-      crackle: this.makeNoise('crackle', 3.1, 0xc0ffee),
-    };
+    this.noiseBuf = bufs.noise;
   }
 
   get now() {
@@ -270,130 +423,6 @@ export class Synth {
     const t = this.ctx.currentTime;
     g.cancelScheduledValues(t);
     g.setTargetAtTime(clamp(v, 0, 1), t, 0.04);
-  }
-
-  // -------------------------------------------------------------------------
-  // Buffer generation
-  // -------------------------------------------------------------------------
-
-  /**
-   * Stereo noise. The two channels are decorrelated, which is what makes wind
-   * and tyre hiss sit *around* the listener instead of as a point in the middle.
-   * 'crackle' is a sparse pop train — it is the whole basis of the overrun
-   * burble and of gravel scatter.
-   */
-  private makeNoise(kind: NoiseKind, seconds: number, seed: number): AudioBuffer {
-    const ac = this.ctx;
-    const sr = ac.sampleRate;
-    const n = Math.floor(sr * seconds);
-    // The loop join is made seamless by generating `fade` extra samples and
-    // crossfading the head against them: the last output sample and the first
-    // are then adjacent samples of one continuous process, so there is no step
-    // at the join. 90 ms is long enough that pink noise's low-frequency content
-    // fades rather than thumps.
-    const fade = Math.floor(sr * 0.09);
-    const len = n - fade;
-    const buf = ac.createBuffer(2, len, sr);
-    const raw = new Float32Array(n);
-    for (let c = 0; c < 2; c++) {
-      const d = raw;
-      const rnd = mulberry32(seed + c * 7919);
-      if (kind === 'white') {
-        for (let i = 0; i < n; i++) d[i] = rnd() * 2 - 1;
-      } else if (kind === 'pink') {
-        // Paul Kellet's refined pink filter — cheap and flat enough to 20 kHz.
-        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
-        for (let i = 0; i < n; i++) {
-          const w = rnd() * 2 - 1;
-          b0 = 0.99886 * b0 + w * 0.0555179;
-          b1 = 0.99332 * b1 + w * 0.0750759;
-          b2 = 0.969 * b2 + w * 0.153852;
-          b3 = 0.8665 * b3 + w * 0.3104856;
-          b4 = 0.55 * b4 + w * 0.5329522;
-          b5 = -0.7616 * b5 - w * 0.016898;
-          d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.16;
-          b6 = w * 0.115926;
-        }
-      } else {
-        // Sparse decaying impulses over a very low noise floor.
-        d.fill(0);
-        let i = 0;
-        while (i < n) {
-          i += Math.floor(rnd() * sr * 0.05) + 24;
-          if (i >= n) break;
-          const amp = 0.35 + rnd() * 0.65;
-          const len = 40 + Math.floor(rnd() * 260);
-          const sign = rnd() < 0.5 ? -1 : 1;
-          const f = 400 + rnd() * 2600;
-          for (let j = 0; j < len && i + j < n; j++) {
-            const t = j / len;
-            d[i + j] += sign * amp * Math.exp(-t * 7) * Math.sin((2 * Math.PI * f * j) / sr);
-          }
-        }
-        for (let j = 0; j < n; j++) d[j] += (rnd() * 2 - 1) * 0.02;
-      }
-      // The pink filter leaves a DC offset and can overshoot full scale. DC
-      // through the engine's waveshaper biases the whole tanh curve, so strip
-      // it and normalise before anything downstream sees it.
-      let mean = 0;
-      for (let i = 0; i < n; i++) mean += d[i];
-      mean /= n;
-      let peak = 0;
-      for (let i = 0; i < n; i++) {
-        d[i] -= mean;
-        const a = Math.abs(d[i]);
-        if (a > peak) peak = a;
-      }
-      if (peak > 0) {
-        const norm = 0.92 / peak;
-        for (let i = 0; i < n; i++) d[i] *= norm;
-      }
-
-      const out = buf.getChannelData(c);
-      for (let i = 0; i < fade; i++) {
-        const k = i / fade;
-        out[i] = d[i] * k + d[len + i] * (1 - k);
-      }
-      for (let i = fade; i < len; i++) out[i] = d[i];
-    }
-    return buf;
-  }
-
-  /**
-   * A plate-ish impulse response: a handful of early reflections in front of an
-   * exponentially decaying, progressively darkening diffuse tail.
-   */
-  makeImpulseResponse(seconds: number, decay: number, brightness: number): AudioBuffer {
-    const ac = this.ctx;
-    const sr = ac.sampleRate;
-    const n = Math.max(1, Math.floor(sr * seconds));
-    const buf = ac.createBuffer(2, n, sr);
-    const early = [0.011, 0.019, 0.026, 0.037, 0.049, 0.063, 0.081];
-    for (let c = 0; c < 2; c++) {
-      const d = buf.getChannelData(c);
-      const rnd = mulberry32(0xbeef + c * 104729);
-      const pre = Math.floor(sr * 0.008);
-      let lp = 0;
-      let peak = 0;
-      for (let i = pre; i < n; i++) {
-        const t = (i - pre) / (n - pre);
-        const amp = Math.pow(1 - t, decay) * (1 - Math.exp(-t * 90));
-        const raw = (rnd() * 2 - 1) * amp;
-        // one-pole whose cutoff falls with time → the tail darkens naturally
-        const k = brightness * (1 - t * 0.85) + 0.03;
-        lp += (raw - lp) * k;
-        d[i] = lp;
-        const a = Math.abs(lp);
-        if (a > peak) peak = a;
-      }
-      for (let e = 0; e < early.length; e++) {
-        const idx = Math.floor((early[e] + (c ? 0.0031 : 0)) * sr);
-        if (idx < n) d[idx] += (e % 2 ? -1 : 1) * (0.55 - e * 0.06) * (0.8 + rnd() * 0.4);
-      }
-      const norm = peak > 0 ? 0.62 / peak : 1;
-      for (let i = 0; i < n; i++) d[i] *= norm;
-    }
-    return buf;
   }
 
   // -------------------------------------------------------------------------
