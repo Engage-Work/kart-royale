@@ -201,7 +201,6 @@ export class Race implements IRace {
   private pauseEdge = false;
   /** the state to return to when the pause menu is dismissed */
   private prePause: RaceState = RaceState.Racing;
-  private pauseThrottleClear = false;
   /** index into `karts` the human drives; see `selectKart` */
   private selected = 0;
 
@@ -373,7 +372,7 @@ export class Race implements IRace {
    * its Resume button used to do nothing but clear the UI's own local copy of
    * the flag. With the director actually modelling the pause — which it does on
    * every real race — the state stayed `Paused` and the only ways out were the
-   * Escape key or the throttle escape hatch below. Clicking Resume, or
+   * Escape key or a since-removed throttle escape hatch. Clicking Resume, or
    * confirming it on a gamepad or a phone (where there is no Escape key at
    * all), left the race suspended for good.
    */
@@ -388,9 +387,6 @@ export class Race implements IRace {
       // Same handover the key path uses: `prePause` restores a mid-count
       // countdown without rearming it (see the `state` setter).
       this.state = this.prePause;
-      // The throttle hatch re-arms from scratch, so resuming with a finger
-      // already on the accelerator cannot instantly re-trigger anything.
-      this.pauseThrottleClear = false;
       this.ctx?.bus.emit({ type: 'ui', name: 'resume' });
     }
   }
@@ -416,19 +412,13 @@ export class Race implements IRace {
         ctx.bus.emit({ type: 'ui', name: 'resume' });
       }
     }
-    if (this.state === RaceState.Paused) {
-      // Secondary escape hatch, kept alongside `setPaused` for the case where
-      // the player reaches for the throttle rather than the menu. Only once it
-      // has been released, or pausing mid-corner would un-pause on the very
-      // next frame.
-      if (input.accel < 0.2) this.pauseThrottleClear = true;
-      else if (this.pauseThrottleClear) {
-        this.state = this.prePause;
-        ctx.bus.emit({ type: 'ui', name: 'resume' });
-      }
-      return;
-    }
-    this.pauseThrottleClear = false;
+    // There used to be a second way out here: touching the throttle resumed.
+    // It predates a pause screen that worked, and it fought the one that does
+    // now — W, ArrowUp, d-pad up and the A button are all throttle AND all
+    // menu input, so moving the highlight or pressing A on "Quit to title"
+    // silently resumed the race instead. Resume is reachable from every
+    // device (Escape / P / Start, B, or the Resume button), so it is gone.
+    if (this.state === RaceState.Paused) return;
 
     // --- clocks -------------------------------------------------------------
     if (this.state === RaceState.Countdown) {

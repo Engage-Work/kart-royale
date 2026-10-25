@@ -1903,7 +1903,9 @@ html:has(#boot:not(.done)) .kr-screen.on .kr-stage { animation-play-state: pause
               background 0.24s var(--e-out), box-shadow 0.24s var(--e-out), border-color 0.24s var(--e-out);
   overflow: hidden;
 }
-.kr-btn:hover, .kr-btn.sel {
+/* `.sel` only, not `:hover`: the mouse moves the selection itself (see
+   `Menus`), so a hover rule here would light a second button. */
+.kr-btn.sel {
   color: var(--ink-2);
   background: linear-gradient(180deg, #fff3cc, #ffc84e 58%, #f09a1c);
   border-color: rgba(255, 236, 190, 0.9);
@@ -1912,6 +1914,7 @@ html:has(#boot:not(.done)) .kr-screen.on .kr-stage { animation-play-state: pause
   transform: scale(1.035);
 }
 .kr-btn:active { transform: scale(0.985); }
+.kr-screens:not(.kr-touch) .kr-touch-only { display: none; }
 
 /* --- results -------------------------------------------------------------- */
 

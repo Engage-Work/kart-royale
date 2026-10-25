@@ -112,6 +112,13 @@ const LOGO_SVG = `
   </g>
 </svg>`;
 
+/** Rising edges published by the concrete `Input`; see `Input.menu`. */
+interface MenuEdges { up: boolean; down: boolean; left: boolean; right: boolean; confirm: boolean; back: boolean; start: boolean }
+const NO_MENU: MenuEdges = { up: false, down: false, left: false, right: false, confirm: false, back: false, start: false };
+type MenuInput = { menu?: MenuEdges; hasPad?: boolean };
+
+type ListName = 'title' | 'select' | 'pause' | 'results';
+
 function buildRays() {
   let s = '';
   for (let i = 0; i < 24; i += 2) {
@@ -148,10 +155,15 @@ export class Menus {
 
   private selected = 0;
   private cards: HTMLDivElement[] = [];
-  private buttons: { pause: HTMLDivElement[]; results: HTMLDivElement[] } = { pause: [], results: [] };
+  /**
+   * Every screen's actions, in navigation order. The highlighted one (`.sel`)
+   * IS the focus: keyboard, gamepad and mouse hover all move the same index,
+   * so there is only ever one lit button. (Hover used to light a second one
+   * with the same gold as the keyboard selection.) Entries marked
+   * `kr-touch-only` drop out of the list when the touch copy is off.
+   */
+  private buttons: Record<ListName, HTMLDivElement[]> = { title: [], select: [], pause: [], results: [] };
   private btnIndex = 0;
-
-  private prevSteer = 0;
   private resultsBuilt = false;
   /** How many karts were classified when the board was last built. */
   private resultsFinished = -1;
@@ -161,10 +173,10 @@ export class Menus {
   /** the controls screen — its own overlay, not one of the four `screens` */
   private controls: ControlsMenu;
   /** title-screen copy follows the device actually in use; see `syncTouchCopy` */
-  private titlePrompt!: HTMLDivElement;
   private titleHint!: HTMLDivElement;
   private titleGlyphs!: HTMLDivElement;
   private touchCopy: boolean | null = null;
+  private padCopy = false;
 
   private rosterEl!: HTMLDivElement;
   private standingsEl!: HTMLDivElement;
@@ -194,10 +206,30 @@ export class Menus {
       else if (t.closest('.kr-card')) this.ui('move');
     });
 
-    // Tap-anywhere confirm. A real control that was tapped handles itself via
-    // its own click handler, so those are excluded to avoid confirming twice.
+    // The mouse moves the same highlight the keys do — on real movement only.
+    // `pointerover` also fires when the layout shifts under a resting cursor,
+    // so a keyboard player who opened pause with the pointer parked over the
+    // right column could find "Quit to title" lit, and Enter would quit.
+    this.root.addEventListener('pointermove', (e) => {
+      if (e.pointerType !== 'mouse' || this.screen === 'none') return;
+      if (e.movementX === 0 && e.movementY === 0) return;
+      const b = (e.target as HTMLElement).closest('.kr-btn') as HTMLDivElement | null;
+      const i = b ? this.list().indexOf(b) : -1;
+      if (i >= 0 && i !== this.btnIndex) {
+        this.btnIndex = i;
+        this.syncButtons();
+      }
+    });
+
+    // Tap-anywhere confirm, for FINGERS and on the TITLE only: a phone has no
+    // Enter key and the title used to have no button at all. With a mouse it
+    // meant that a click to focus the window started the race, and on the
+    // select screen a finger landing between two racer cards did the same —
+    // that screen has a real Start button now. A real control that was tapped
+    // handles itself via its own click handler, so those are excluded to avoid
+    // confirming twice.
     this.root.addEventListener('pointerdown', (e) => {
-      if (!this.blocking) return;
+      if (this.screen !== 'title' || e.pointerType === 'mouse') return;
       const t = e.target as HTMLElement;
       if (t.closest('.kr-btn, .kr-card')) return;
       this.tapConfirm = true;
@@ -236,40 +268,43 @@ export class Menus {
     // The title copy follows the device actually in use, and `input.touch` can
     // flip mid-session (the iPadOS lazy mount, or a keyboard being pressed on a
     // tablet). Cached on the value, so this is a compare per frame.
-    this.syncTouchCopy(ctx.input.touch);
+    const mi = ctx.input as unknown as MenuInput;
+    const menu = mi.menu ?? NO_MENU;
+    this.syncTouchCopy(ctx.input.touch, mi.hasPad === true);
 
     // The controls screen owns input while it is up: it is a sibling overlay,
     // not one of the four screens, so nothing below it may act on a confirm.
     this.controls.update(ctx);
     if (this.controls.open) {
+      if (menu.back) this.controls.close();
       this.tapConfirm = false;
-      this.prevSteer = input.steer;
       return;
     }
 
     const inRace = race.state === RaceState.Racing || race.state === RaceState.Countdown;
 
-    // Confirm is `itemPressed` — Enter / Space / E / gamepad face button — which
-    // is what the on-screen hint actually promises. It used to read
-    // `pausePressed`, i.e. Escape or P alone, so the title screen said "PRESS
-    // ENTER TO START" and Enter did nothing at all.
+    // Menu input comes from `Input.menu` — Enter / Space / A to confirm,
+    // Escape / Backspace / B to go back, arrows / d-pad / stick to move. It
+    // used to borrow the driving controls (`itemPressed`, steer edges), which
+    // left the A button and up/down dead on every menu.
     //
     // It is gated on a screen actually being up. Without that gate the same
     // keypress that fires a shell also opens the pause menu, because with no
     // screen showing `onConfirm` falls through to its pause branch.
     if (this.screen !== 'none') {
-      if (input.itemPressed || this.tapConfirm) this.onConfirm(ctx, inRace);
+      // Start confirms too, except on pause, where it is the resume toggle.
+      const start = menu.start && this.screen !== 'pause';
+      if (menu.confirm || start || this.tapConfirm) this.onConfirm(ctx, inRace);
+      else if (menu.back) this.onBack();
+      else if (menu.left) this.nav(-1, 0);
+      else if (menu.right) this.nav(1, 0);
+      else if (menu.up) this.nav(0, -1);
+      else if (menu.down) this.nav(0, 1);
     } else if (input.pausePressed && inRace) {
       this.localPause = true;
       this.ui('pause');
     }
     this.tapConfirm = false;
-
-    // steer edges drive menu navigation on keyboard/gamepad
-    const st = input.steer;
-    if (st > 0.55 && this.prevSteer <= 0.55) this.nav(1);
-    else if (st < -0.55 && this.prevSteer >= -0.55) this.nav(-1);
-    this.prevSteer = st;
 
     let want: ScreenName;
     if (this.forced) want = this.forced;
@@ -341,43 +376,78 @@ export class Menus {
 
   // ------------------------------------------------------------------ input
 
-  private nav(dir: number) {
+  /** The current screen's actions that are actually shown, in order. */
+  private list(): HTMLDivElement[] {
+    if (this.screen === 'none') return [];
+    const all = this.buttons[this.screen];
+    return this.touchCopy ? all : all.filter((b) => !b.classList.contains('kr-touch-only'));
+  }
+
+  /**
+   * On the select screen the arrows pick a racer — left/right along a row,
+   * up/down between rows — and confirm presses Start. Everywhere else they
+   * walk the screen's button list.
+   */
+  private nav(dx: number, dy: number) {
     if (this.screen === 'select') {
-      this.selected = (this.selected + dir + this.cards.length) % this.cards.length;
+      const n = this.cards.length;
+      if (n === 0) return;
+      const step = dx !== 0 ? dx : dy * this.rosterCols();
+      this.selected = (((this.selected + step) % n) + n) % n;
       this.syncCards();
-    } else if (this.screen === 'pause' || this.screen === 'results') {
-      const list = this.screen === 'pause' ? this.buttons.pause : this.buttons.results;
-      this.btnIndex = (this.btnIndex + dir + list.length) % list.length;
+      this.btnIndex = 0;
       this.syncButtons();
     } else {
-      return;
+      const list = this.list();
+      if (list.length < 2) return;
+      this.btnIndex = (this.btnIndex + (dx || dy) + list.length) % list.length;
+      this.syncButtons();
     }
     this.ui('move');
+  }
+
+  /** Cards per row of the roster grid, read off the layout (it reflows on a phone). */
+  private rosterCols(): number {
+    const top = this.cards[0]?.offsetTop ?? 0;
+    let cols = 0;
+    while (cols < this.cards.length && this.cards[cols].offsetTop === top) cols++;
+    return Math.max(1, cols);
   }
 
   /**
    * Keyboard confirm routes through the same `click()` the mouse uses, so the
    * 'confirm' SFX is emitted once, by the delegated listener in the ctor.
    */
-  private onConfirm(ctx: Ctx, inRace: boolean) {
-    switch (this.screen) {
-      case 'title':
-        this.selecting = true;
-        this.ui('confirm');
-        return;
-      case 'select':
-        this.startRace(ctx);
-        this.ui('confirm');
-        return;
-      case 'pause':
-        this.buttons.pause[this.btnIndex]?.click();
-        return;
-      case 'results':
-        this.buttons.results[this.btnIndex]?.click();
-        return;
-      default:
-        if (inRace) { this.localPause = true; this.ui('pause'); }
+  private onConfirm(_ctx: Ctx, inRace: boolean) {
+    if (this.screen === 'none') {
+      if (inRace) { this.localPause = true; this.ui('pause'); }
+      return;
     }
+    this.list()[this.btnIndex]?.click();
+  }
+
+  /**
+   * Escape / Backspace / B. Select goes back to the title; pause resumes. On
+   * pause, Escape is ALSO the race director's own pause toggle, which has
+   * already resumed by the time this runs — resuming again is a no-op.
+   */
+  private onBack() {
+    if (this.screen === 'select') {
+      this.selecting = false;
+      this.ui('move');
+    } else if (this.screen === 'pause') {
+      this.resume();
+    }
+  }
+
+  private resume() {
+    // Clearing `localPause` alone is not enough: on a real race the director
+    // owns the pause and `race.state` is `Paused`, which keeps `want` pinned to
+    // this screen no matter what the UI's own flag says. Resume has to tell the
+    // director too, or the button does nothing — which is exactly what it did.
+    this.localPause = false;
+    this.forced = null;
+    this.ctx?.race.setPaused(false);
   }
 
   /** Menu SFX hook — the audio system listens for these on the bus. */
@@ -425,12 +495,20 @@ export class Menus {
     // a lazy capture-phase mount on the first real finger; the menu copy was
     // never brought along, so an iPad in desktop mode got on-screen controls and
     // the words "Press Enter to Start" above them.
-    this.titlePrompt = el('div', 'kr-prompt', wrap);
+    // The primary action is a real button now. It used to be a line of
+    // breathing text ("Press Enter to Start") with nothing to click, and the
+    // only button on the screen was the secondary one, Controls.
+    const list = el('div', 'kr-menu-list kr-title-list', wrap);
+    const race = el('div', 'kr-btn kr-btn-primary', list, 'Race');
+    race.onclick = () => { this.selecting = true; };
+    // The controls screen is the TOUCH scheme picker; on a keyboard or a pad
+    // there is nothing on it to set, so it only appears with the touch copy.
+    const cbtn = el('div', 'kr-btn kr-btn-controls kr-touch-only', list, 'Controls');
+    cbtn.onclick = (e) => { e.stopPropagation(); this.controls.show(); };
+    this.buttons.title = [race, cbtn];
     this.titleGlyphs = el('div', 'kr-glyphs', wrap);
     this.titleHint = el('div', 'kr-hint', wrap);
-    const cbtn = el('div', 'kr-btn kr-btn-controls', wrap, 'Controls');
-    cbtn.onclick = (e) => { e.stopPropagation(); this.controls.show(); };
-    this.syncTouchCopy(false);
+    this.syncTouchCopy(false, false);
     return s;
   }
 
@@ -447,21 +525,31 @@ export class Menus {
    * stick in `TouchControls` is the other half of this, and it is on the frame
    * the player is looking at rather than on a screen they are leaving.
    */
-  private syncTouchCopy(touch: boolean) {
-    if (this.touchCopy === touch) return;
+  private syncTouchCopy(touch: boolean, pad: boolean) {
+    if (this.touchCopy === touch && this.padCopy === pad) return;
+    const before = this.list()[this.btnIndex];
     this.touchCopy = touch;
-    this.titlePrompt.textContent = touch ? 'Tap to Start' : 'Press Enter to Start';
+    this.padCopy = pad;
+    this.root.classList.toggle('kr-touch', touch);
+    // Keep the highlight on the same button when the list changes under it.
+    this.btnIndex = Math.max(0, this.list().indexOf(before));
+    this.syncButtons();
     if (touch) {
       this.titleGlyphs.innerHTML =
         '<div class="kr-gl"><span class="kr-gl-stick"><i></i><b></b></span>Steer</div>' +
         '<div class="kr-gl"><span class="kr-gl-drift">DRIFT</span>Slide</div>' +
         '<div class="kr-gl"><span class="kr-gl-item">+</span>Fire</div>';
       this.titleHint.innerHTML = '';
+    } else if (pad) {
+      this.titleGlyphs.innerHTML = '';
+      this.titleHint.innerHTML =
+        '<span><b>L</b> steer</span><span><b>RT</b><b>A</b> accelerate</span>' +
+        '<span><b>RB</b> drift</span><span><b>X</b> item</span><span><b>Start</b> pause</span>';
     } else {
       this.titleGlyphs.innerHTML = '';
       this.titleHint.innerHTML =
-        '<b>&#8592;</b><b>&#8594;</b> steer &nbsp;&nbsp; <b>&#8593;</b> accelerate &nbsp;&nbsp; ' +
-        '<b>Shift</b> drift &nbsp;&nbsp; <b>Space</b> item &nbsp;&nbsp; <b>Esc</b> pause';
+        '<span><b>&#8592;</b><b>&#8594;</b> steer</span><span><b>&#8593;</b> accelerate</span>' +
+        '<span><b>Shift</b> drift</span><span><b>Space</b> item</span><span><b>Esc</b> pause</span>';
     }
   }
 
@@ -471,9 +559,13 @@ export class Menus {
     const head = el('div', 'kr-stage', inner);
     el('div', 'kr-title kr-gold', head, 'Choose your racer');
     this.rosterEl = el('div', 'kr-roster kr-stage', inner);
-    const go = el('div', 'kr-menu-list kr-stage', inner);
-    const btn = el('div', 'kr-btn sel', go, 'Start race');
+    const go = el('div', 'kr-menu-list kr-select-list kr-stage', inner);
+    const btn = el('div', 'kr-btn kr-btn-primary', go, 'Start race');
     btn.onclick = () => this.startRace(this.ctx);
+    // A way back for the mouse and the finger; Escape / B do the same.
+    const back = el('div', 'kr-btn', go, 'Back');
+    back.onclick = () => { this.selecting = false; };
+    this.buttons.select = [btn, back];
     return s;
   }
 
@@ -548,19 +640,11 @@ export class Menus {
     const list = el('div', 'kr-menu-list', right);
 
     const resume = el('div', 'kr-btn', list, 'Resume');
-    // Clearing `localPause` alone is not enough: on a real race the director
-    // owns the pause and `race.state` is `Paused`, which keeps `want` pinned to
-    // this screen no matter what the UI's own flag says. Resume has to tell the
-    // director too, or the button does nothing — which is exactly what it did.
-    resume.onclick = () => {
-      this.localPause = false;
-      this.forced = null;
-      this.ctx?.race.setPaused(false);
-    };
+    resume.onclick = () => this.resume();
     // Reachable MID-RACE, deliberately. `setScheme` releases every pointer and
     // zeroes the command and never touches `IRace`, so a player who cannot
     // steer can fix that without abandoning the race they are in.
-    const ctrl = el('div', 'kr-btn', list, 'Controls');
+    const ctrl = el('div', 'kr-btn kr-touch-only', list, 'Controls');
     ctrl.onclick = () => this.controls.show();
     const restart = el('div', 'kr-btn', list, 'Restart race');
     restart.onclick = () => { this.localPause = false; this.forced = null; this.startRace(this.ctx); };
@@ -597,12 +681,9 @@ export class Menus {
   }
 
   private syncButtons() {
-    const list = this.screen === 'pause' ? this.buttons.pause
-      : this.screen === 'results' ? this.buttons.results : null;
-    for (const group of [this.buttons.pause, this.buttons.results]) {
-      for (let i = 0; i < group.length; i++) {
-        group[i].classList.toggle('sel', group === list && i === this.btnIndex);
-      }
+    const lit = this.list()[this.btnIndex];
+    for (const group of Object.values(this.buttons)) {
+      for (const b of group) b.classList.toggle('sel', b === lit);
     }
   }
 

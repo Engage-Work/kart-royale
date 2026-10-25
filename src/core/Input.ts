@@ -212,6 +212,24 @@ export class Input implements IInput {
   /** REPORTED, for tools/haptic-bench.mjs: what the last correction was */
   assistLast = 0;
 
+  /**
+   * Rising edges for MENU navigation, read by `src/ui/Menus.ts` through a cast
+   * (same reason as `pad`: `IInput` may not be widened for a UI screen).
+   *
+   * Menus cannot run on the driving controls. Confirm used to be `itemPressed`,
+   * which on a pad is X/Y — the A button every player presses first is the
+   * THROTTLE — and the vertical pause and results lists only moved on steer
+   * left/right. These are the conventional bindings instead: arrows / WASD /
+   * d-pad / left stick to move, Enter / Space / A to confirm, Escape /
+   * Backspace / B to go back. `start` is the pad's Start button on its own:
+   * it confirms on the front-end screens, but it is also the pause toggle, so
+   * on the pause screen it must not also press the highlighted button.
+   */
+  readonly menu = { up: false, down: false, left: false, right: false, confirm: false, back: false, start: false };
+  /** true while a gamepad is connected, so menu copy can show its buttons */
+  get hasPad(): boolean { return this.padIndex >= 0; }
+  private menuHeld = { up: false, down: false, left: false, right: false, confirm: false, back: false, start: false };
+
   init(ctx: Ctx) {
     this.ctx = ctx;
     addEventListener('keydown', this.onDown);
@@ -621,6 +639,26 @@ export class Input implements IInput {
       if (accel > 0 || brake > 0 || drift || item || look || pause) acted = true;
     }
 
+    // --- menu edges -------------------------------------------------------------
+    {
+      const b = gp?.buttons;
+      const sx = gp ? gp.axes[0] ?? 0 : 0;
+      const sy = gp ? gp.axes[1] ?? 0 : 0;
+      const held = {
+        up: hit('ArrowUp', 'KeyW') || !!b?.[12]?.pressed || sy < -MENU_STICK,
+        down: hit('ArrowDown', 'KeyS') || !!b?.[13]?.pressed || sy > MENU_STICK,
+        left: hit('ArrowLeft', 'KeyA') || !!b?.[14]?.pressed || sx < -MENU_STICK,
+        right: hit('ArrowRight', 'KeyD') || !!b?.[15]?.pressed || sx > MENU_STICK,
+        confirm: hit('Enter', 'NumpadEnter', 'Space') || !!b?.[0]?.pressed,
+        back: hit('Escape', 'Backspace') || !!b?.[1]?.pressed,
+        start: !!b?.[9]?.pressed,
+      };
+      for (const k of Object.keys(held) as (keyof typeof held)[]) {
+        this.menu[k] = held[k] && !this.menuHeld[k];
+        this.menuHeld[k] = held[k];
+      }
+    }
+
     // --- steering -------------------------------------------------------------
     if (analogue !== null) {
       // Straight through. The kart's own rack is the rate limit.
@@ -790,9 +828,12 @@ function clamp01(v: number) {
   return !Number.isFinite(v) ? 0 : v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
+/** stick deflection that counts as one menu step; re-arms when it returns */
+const MENU_STICK = 0.55;
+
 // Keys the browser would otherwise scroll the page with. `Enter` is
 // deliberately *not* here: it is the item key, but swallowing it would also
 // stop a focused menu button from activating.
 const SWALLOW = new Set([
-  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Backspace',
 ]);
