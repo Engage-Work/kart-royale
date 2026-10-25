@@ -1642,8 +1642,9 @@ html:has(#boot:not(.done)) .kr-screen.on .kr-stage { animation-play-state: pause
 /* --- title ---------------------------------------------------------------- */
 
 .kr-logo { width: min(112vmin, 88vw); max-height: 52vh; display: block; }
-.kr-logo .kr-logo-rays { animation: kr-rays 42s linear infinite; transform-origin: 450px 200px; }
-@keyframes kr-rays { to { transform: rotate(360deg); } }
+/* The rays are still. They used to turn forever (42 s a lap), and an SVG
+   group under a mask and a drop-shadow filter is not composited: the whole
+   logo was re-rasterised every frame for as long as the title was up. */
 .kr-logo-wm { font-family: var(--f); font-weight: 900; }
 
 .kr-sub {
@@ -1655,22 +1656,6 @@ html:has(#boot:not(.done)) .kr-screen.on .kr-stage { animation-play-state: pause
   text-transform: uppercase;
   color: rgba(255, 226, 174, 0.86);
   text-shadow: 0 0.1em 0.4em rgba(20, 10, 4, 0.9);
-}
-
-.kr-prompt {
-  margin-top: 4.5vmin;
-  font-size: clamp(12px, 2.1vmin, 28px);
-  font-weight: 800;
-  letter-spacing: 0.3em;
-  text-indent: 0.3em;
-  text-transform: uppercase;
-  color: var(--paper);
-  animation: kr-breathe 2.4s var(--e-soft) infinite;
-  text-shadow: 0 0.1em 0.35em rgba(20, 10, 4, 0.9);
-}
-@keyframes kr-breathe {
-  0%, 100% { opacity: 0.42; transform: scale(0.99); }
-  50%      { opacity: 1; transform: scale(1.01); }
 }
 
 /* DEFECT D6 — the touch onboarding row.
@@ -1724,23 +1709,42 @@ html:has(#boot:not(.done)) .kr-screen.on .kr-stage { animation-play-state: pause
 }
 .kr-gl-item { font-size: clamp(16px, 2.6vmin, 26px) !important; font-weight: 400; }
 
-/* 46 px tall, because it is a real target on a phone — but narrow, because it
-   must not compete with "Tap to Start". A player who never presses this gets a
-   good default; a player who needs another scheme must be able to find it. */
+/* The title's actions: Race, and on touch the Controls sheet under it. */
+.kr-title-list { margin-top: 3.4vmin; width: clamp(220px, 34vmin, 380px); }
+
+/* 46 px tall, because it is a real target on a phone — but smaller, because
+   it must not compete with Race. A player who never presses this gets a good
+   default; a player who needs another scheme must be able to find it. */
 .kr-btn-controls {
-  margin-top: 1.4vmin;
   min-height: 46px;
+  display: grid;
+  place-items: center;
   padding: 0 1.6em;
-  font-size: clamp(11px, 1.6vmin, 15px);
-  opacity: 0.82;
+  font-size: clamp(12px, 1.6vmin, 15px);
 }
 
+/* The primary action keeps its gold edge even while the highlight is on
+   another button, so it never reads as just one more option. */
+.kr-btn-primary:not(.sel) {
+  color: var(--gold);
+  border-color: rgba(255, 214, 120, 0.55);
+}
+
+/* Select: Start and Back side by side, so the roster keeps the height. */
+.kr-select-list { flex-direction: row; justify-content: center; width: auto; }
+.kr-select-list .kr-btn { min-width: clamp(140px, 22vmin, 300px); }
+.kr-select-list .kr-btn:not(.kr-btn-primary) { min-width: 0; }
+
 .kr-hint {
-  margin-top: 2.4vmin;
-  font-size: clamp(9px, 1.4vmin, 18px);
+  margin-top: 2.6vmin;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5em 1.6em;
+  font-size: clamp(12px, 1.6vmin, 18px);
   font-weight: 600;
-  letter-spacing: 0.16em;
-  color: rgba(248, 242, 230, 0.44);
+  letter-spacing: 0.12em;
+  color: rgba(248, 242, 230, 0.72);
   text-transform: uppercase;
 }
 .kr-hint b {
@@ -1845,7 +1849,7 @@ html:has(#boot:not(.done)) .kr-screen.on .kr-stage { animation-play-state: pause
   right: clamp(8px, 1.5vmin, 20px);
   padding: 0.2em 0.55em 0.24em;
   border-radius: 0.5em;
-  font-size: clamp(8px, 1.15vmin, 15px);
+  font-size: clamp(10px, 1.2vmin, 15px);
   font-weight: 900;
   letter-spacing: 0.2em;
   color: var(--ink-2);
@@ -1853,13 +1857,13 @@ html:has(#boot:not(.done)) .kr-screen.on .kr-stage { animation-play-state: pause
 }
 
 .kr-stats { margin-top: 1vmin; display: flex; flex-direction: column; gap: 0.55vmin; }
-.kr-stat { display: grid; grid-template-columns: 4.6em 1fr; align-items: center; gap: 0.6em; }
+.kr-stat { display: grid; grid-template-columns: 6.4em 1fr; align-items: center; gap: 0.6em; }
 .kr-stat span {
-  font-size: clamp(7px, 1.05vmin, 14px);
+  font-size: clamp(10px, 1.3vmin, 14px);
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: rgba(248, 242, 230, 0.5);
+  color: rgba(248, 242, 230, 0.66);
 }
 .kr-bar {
   position: relative;
