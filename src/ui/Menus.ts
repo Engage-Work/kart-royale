@@ -487,6 +487,7 @@ export class Menus {
     wrap.style.alignItems = 'center';
     wrap.innerHTML = LOGO_SVG.replace('RAYS', buildRays());
     el('div', 'kr-sub', wrap, 'Sunset Bay Circuit');
+    el('div', 'kr-edition', wrap, 'Engage Edition');
     // Built empty; `syncTouchCopy` fills it from `ctx.input.touch` every time
     // that flips. This used to run its OWN `matchMedia('(pointer: coarse)')`
     // probe once, in the constructor — which is exactly the check that fails on
